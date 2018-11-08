@@ -20,6 +20,7 @@ func main() {
 	conn, err := net.Dial("tcp", *addr)
 	if err != nil {
 		fmt.Printf("Failed to connect: %v\n", err)
+		return
 	}
 
 	defer conn.Close()
@@ -29,6 +30,7 @@ func main() {
 	f, err := os.Open(*inFile)
 	if err != nil {
 		fmt.Printf("Failed to open file: %v\n", err)
+		return
 	}
 
 	defer f.Close()
@@ -42,10 +44,12 @@ func main() {
 			fmt.Println("Connection closed")
 			if read != 0 {
 				fmt.Printf("Unexpected: %d", read)
+				return
 			}
 			break
 		} else if err != nil {
 			fmt.Printf("Failed to read: %v\n", err)
+			return
 		}
 
 		if *verbose {
@@ -57,6 +61,7 @@ func main() {
 			n, err := conn.Write(buf[sent:read])
 			if err != nil {
 				fmt.Printf("Failed to send: %v\n", err)
+				return
 			}
 
 			if *verbose {
