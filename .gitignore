@@ -3,3 +3,4 @@ debug.test
 sendfile
 sendfile.exe
 in.bin
+out.bin
