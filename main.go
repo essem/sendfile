@@ -4,14 +4,16 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"os"
 )
 
 type condition struct {
-	totalSize int64
-	bufSize   int
-	verbose   bool
+	totalSize  int64
+	bufSize    int
+	bufSizeVar int
+	verbose    bool
 }
 
 type readResult struct {
@@ -33,6 +35,7 @@ type writeResult struct {
 func main() {
 	addr := flag.String("h", "localhost:3000", "Host to connect")
 	bufSize := flag.Int("b", 300, "Buffer size")
+	bufSizeVar := flag.Int("bv", 100, "Buffer size variation")
 	chanSize := flag.Int("c", 1, "Channel size")
 	inFile := flag.String("i", "in.bin", "Input file name")
 	outFile := flag.String("o", "", "Output file name")
@@ -40,9 +43,10 @@ func main() {
 	flag.Parse()
 
 	cond := condition{
-		totalSize: 0,
-		bufSize:   *bufSize,
-		verbose:   *verbose,
+		totalSize:  0,
+		bufSize:    *bufSize,
+		bufSizeVar: *bufSizeVar,
+		verbose:    *verbose,
 	}
 
 	fmt.Printf("Connect to %s\n", *addr)
@@ -93,11 +97,11 @@ func main() {
 	receiveResultCh := make(chan receiveResult, *chanSize)
 	writeResultCh := make(chan writeResult, *chanSize)
 
-	readOutCh := make(chan []byte)
+	readOutCh := make(chan []byte, *chanSize)
 	go reader(cond, file, readOutCh, readResultCh)
 	go sender(cond, conn, readOutCh, sendResultCh)
 	if oFile != nil {
-		receiveOutCh := make(chan []byte)
+		receiveOutCh := make(chan []byte, *chanSize)
 		go receiver(cond, conn, receiveOutCh, receiveResultCh)
 		go writer(cond, oFile, receiveOutCh, writeResultCh)
 	}
@@ -130,7 +134,8 @@ func reader(cond condition, file *os.File, outCh chan []byte, resultCh chan read
 	var result readResult
 
 	for {
-		buf := make([]byte, cond.bufSize)
+		bufSize := cond.bufSize + rand.Intn(cond.bufSizeVar*2+1) - cond.bufSizeVar // (0,1,2,3,4) - 2 => -2,-1,0,1,2
+		buf := make([]byte, bufSize)
 		read, err := file.Read(buf)
 		if err == io.EOF {
 			fmt.Println("Connection closed")
