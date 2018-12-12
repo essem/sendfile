@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const headerSize = 8
+
 type condition struct {
 	totalSize  int64
 	bufSize    int
@@ -62,8 +64,8 @@ func main() {
 	// Prepare channels and launch goroutines
 
 	stashCh := make(chan *sentInfo, *chanSize)
-	sendResultCh := make(chan sendResult, *chanSize)
-	receiveResultCh := make(chan receiveResult, *chanSize)
+	sendResultCh := make(chan sendResult, 1)
+	receiveResultCh := make(chan receiveResult, 1)
 
 	go sender(cond, conn, stashCh, sendResultCh)
 	go receiver(cond, conn, stashCh, receiveResultCh)
@@ -146,7 +148,7 @@ func recvFull(cond condition, conn net.Conn, buf []byte) error {
 
 func receiver(cond condition, conn net.Conn, stashCh chan *sentInfo, resultCh chan receiveResult) {
 	var result receiveResult
-	headerBuf := make([]byte, 8)
+	recvBuf := make([]byte, cond.bufSize+cond.bufSizeVar)
 	recvSeq := 1
 
 	for {
@@ -155,6 +157,7 @@ func receiver(cond condition, conn net.Conn, stashCh chan *sentInfo, resultCh ch
 			break
 		}
 
+		headerBuf := recvBuf[:headerSize]
 		err := recvFull(cond, conn, headerBuf)
 		if err != nil {
 			break
@@ -168,7 +171,7 @@ func receiver(cond condition, conn net.Conn, stashCh chan *sentInfo, resultCh ch
 			os.Exit(1)
 		}
 
-		buf := make([]byte, bufSize)
+		buf := recvBuf[:bufSize]
 		err = recvFull(cond, conn, buf)
 		if err != nil {
 			break
