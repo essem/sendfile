@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
@@ -167,56 +168,96 @@ func reader(cond condition, file *os.File, outCh chan []byte, resultCh chan read
 	resultCh <- result
 }
 
-func sender(cond condition, conn net.Conn, inCh chan []byte, resultCh chan sendResult) {
-	var result sendResult
-	for buf := range inCh {
-		sent := 0
-		for sent < len(buf) {
-			n, err := conn.Write(buf[sent:])
-			if err != nil {
-				fmt.Printf("Failed to send: %v\n", err)
-				os.Exit(1)
-			}
-
-			if cond.verbose {
-				fmt.Printf("Sent: %d\n", n)
-			}
-
-			sent += n
+func sendFull(cond condition, conn net.Conn, buf []byte) {
+	sent := 0
+	for sent < len(buf) {
+		n, err := conn.Write(buf[sent:])
+		if err != nil {
+			fmt.Printf("Failed to send: %v\n", err)
+			os.Exit(1)
 		}
 
-		result.total += sent
+		if cond.verbose {
+			fmt.Printf("Sent: %d\n", n)
+		}
+
+		sent += n
+	}
+}
+
+func sender(cond condition, conn net.Conn, inCh chan []byte, resultCh chan sendResult) {
+	var result sendResult
+	headerBuf := make([]byte, 8)
+	sendSeq := 1
+
+	for buf := range inCh {
+
+		binary.BigEndian.PutUint32(headerBuf[0:4], uint32(len(buf)))
+		binary.BigEndian.PutUint32(headerBuf[4:8], uint32(sendSeq))
+
+		sendFull(cond, conn, headerBuf)
+		sendFull(cond, conn, buf)
+
+		result.total += len(buf)
 	}
 
 	resultCh <- result
 }
 
-func receiver(cond condition, conn net.Conn, outCh chan []byte, resultCh chan receiveResult) {
-	var result receiveResult
-
-	for {
-		buf := make([]byte, cond.bufSize)
-		received, err := conn.Read(buf)
+func recvFull(cond condition, conn net.Conn, buf []byte) error {
+	received := 0
+	for received < len(buf) {
+		n, err := conn.Read(buf[received:])
 		if err == io.EOF {
 			fmt.Println("Connection closed")
 			if received != 0 {
 				fmt.Printf("Unexpected: %d", received)
 				os.Exit(1)
 			}
-			break
+			return err
 		} else if err != nil {
 			fmt.Printf("Failed to recv: %v\n", err)
 			os.Exit(1)
 		}
 
-		if outCh != nil {
-			outCh <- buf[:received]
+		received += n
+	}
+	return nil
+}
+
+func receiver(cond condition, conn net.Conn, outCh chan []byte, resultCh chan receiveResult) {
+	var result receiveResult
+	headerBuf := make([]byte, 8)
+	recvSeq := 1
+
+	for {
+		err := recvFull(cond, conn, headerBuf)
+		if err != nil {
+			break
 		}
 
-		result.total += received
+		bufSize := int(binary.BigEndian.Uint32(headerBuf[0:4]))
+		seq := int(binary.BigEndian.Uint32(headerBuf[4:8]))
+
+		if seq != recvSeq {
+			fmt.Printf("Invalid seq: expected %d, actual %d", recvSeq, seq)
+			os.Exit(1)
+		}
+
+		buf := make([]byte, bufSize)
+		err = recvFull(cond, conn, buf)
+		if err != nil {
+			break
+		}
+
+		if outCh != nil {
+			outCh <- buf
+		}
+
+		result.total += bufSize
 
 		if cond.verbose {
-			fmt.Printf("Recevied: %d\n", received)
+			fmt.Printf("Recevied: %d\n", bufSize)
 		}
 
 		if int64(result.total) == cond.totalSize {
