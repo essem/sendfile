@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
-	"io"
 	"math/rand"
 	"net"
 	"os"
@@ -82,21 +81,28 @@ func main() {
 	fmt.Printf("Total sent: %d\n", sendResult.total)
 }
 
-func sendFull(cond condition, conn net.Conn, buf []byte) {
-	sent := 0
-	for sent < len(buf) {
-		n, err := conn.Write(buf[sent:])
+func recvFull(rwc net.Conn, buf []byte) error {
+	pos := 0
+	for pos < len(buf) {
+		n, err := rwc.Read(buf[pos:])
 		if err != nil {
-			fmt.Printf("Failed to send: %v\n", err)
-			os.Exit(1)
+			return err
 		}
-
-		if cond.verbose {
-			fmt.Printf("Sent: %d\n", n)
-		}
-
-		sent += n
+		pos += n
 	}
+	return nil
+}
+
+func sendFull(rwc net.Conn, buf []byte) error {
+	pos := 0
+	for pos < len(buf) {
+		n, err := rwc.Write(buf[pos:])
+		if err != nil {
+			return err
+		}
+		pos += n
+	}
+	return nil
 }
 
 func sender(cond condition, conn net.Conn, stashCh chan *sentInfo, resultCh chan sendResult) {
@@ -115,35 +121,23 @@ func sender(cond condition, conn net.Conn, stashCh chan *sentInfo, resultCh chan
 		binary.BigEndian.PutUint32(headerBuf[0:4], uint32(len(buf)))
 		binary.BigEndian.PutUint32(headerBuf[4:8], uint32(sendSeq))
 
-		sendFull(cond, conn, headerBuf)
-		sendFull(cond, conn, buf)
+		err := sendFull(conn, headerBuf)
+		if err != nil {
+			fmt.Printf("Failed to send header: %v\n", err)
+			os.Exit(1)
+		}
+
+		err = sendFull(conn, buf)
+		if err != nil {
+			fmt.Printf("Failed to send body: %v\n", err)
+			os.Exit(1)
+		}
 
 		result.total += len(buf)
 	}
 
 	stashCh <- nil
 	resultCh <- result
-}
-
-func recvFull(cond condition, conn net.Conn, buf []byte) error {
-	received := 0
-	for received < len(buf) {
-		n, err := conn.Read(buf[received:])
-		if err == io.EOF {
-			fmt.Println("Connection closed")
-			if received != 0 {
-				fmt.Printf("Unexpected: %d", received)
-				os.Exit(1)
-			}
-			return err
-		} else if err != nil {
-			fmt.Printf("Failed to recv: %v\n", err)
-			os.Exit(1)
-		}
-
-		received += n
-	}
-	return nil
 }
 
 func receiver(cond condition, conn net.Conn, stashCh chan *sentInfo, resultCh chan receiveResult) {
@@ -158,9 +152,11 @@ func receiver(cond condition, conn net.Conn, stashCh chan *sentInfo, resultCh ch
 		}
 
 		headerBuf := recvBuf[:headerSize]
-		err := recvFull(cond, conn, headerBuf)
+		err := recvFull(conn, headerBuf)
 		if err != nil {
-			break
+			//TODO handle close
+			fmt.Printf("Failed to read message: %v\n", err)
+			os.Exit(1)
 		}
 
 		bufSize := int(binary.BigEndian.Uint32(headerBuf[0:4]))
@@ -172,9 +168,10 @@ func receiver(cond condition, conn net.Conn, stashCh chan *sentInfo, resultCh ch
 		}
 
 		buf := recvBuf[:bufSize]
-		err = recvFull(cond, conn, buf)
+		err = recvFull(conn, buf)
 		if err != nil {
-			break
+			fmt.Printf("Failed to read message: %v\n", err)
+			os.Exit(1)
 		}
 
 		if !bytes.Equal(sent.buffer, buf) {
